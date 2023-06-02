@@ -1,0 +1,195 @@
+#@title Upload file that you want to use for model training and press run (required/mandatory step)
+import ipywidgets as widgets
+from google.colab import files
+import io
+import pandas as pd
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error
+from sklearn import preprocessing
+from google.colab import drive
+import joblib
+
+
+uploaded = widgets.FileUpload()
+display(uploaded)
+
+def handle_submit(file_uploader):
+    uploaded_file = file_uploader.data[0]
+    # Create a binary stream from the file data
+    stream = io.BytesIO(uploaded_file)
+    data = pd.read_csv(stream, delimiter = ",")
+    data = data.drop(0)
+    
+    try:
+      data = data.drop("Unnamed: 7", axis = 1)
+    except:
+      pass
+    try:
+      data['relative size'] = data['relative size'].apply(lambda x: "medium" if x == "medim" else x)
+    except:
+      pass
+    
+    categorical_cols = ['relative size','education','socioeconomic']
+    mapping = {}
+    # Perform label encoding of categorical vars also store the transformations in a dict 
+    le = preprocessing.LabelEncoder()
+    for col in categorical_cols:
+        data[col] = le.fit_transform(data[col])
+        mapping[col] = dict(zip(le.classes_, le.transform(le.classes_)))
+    joblib.dump(mapping, 'mapping.joblib')
+    X = data[["age", "weight","height","relative size","education", "socioeconomic", "distance ","base width","pinch"]]
+    y = data["implant_size"]
+    joblib.dump(data, 'data.joblib')
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=0)
+    joblib.dump(y_test, 'y_test.joblib')
+    joblib.dump(X_train, "X_train.joblib")
+    model = DecisionTreeRegressor()
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+    joblib.dump(y_pred, 'y_pred.joblib')
+    mae = mean_absolute_error(y_test, y_pred)
+    print("Model now trained. Mean Absolute Error: ", mae)
+    #Save Model
+    joblib.dump(model, 'trained_model.joblib')
+
+run_button = widgets.Button(description="Run")
+run_button.on_click(lambda x: handle_submit(uploaded))
+display(run_button)
+
+
+#@title Either upload a csv to make predictions (many at a time) or use the input space to fill manually (one at a time) without numerical mapping
+import ipywidgets as widgets
+from google.colab import files
+
+# Load the trained model from the file
+model = joblib.load('trained_model.joblib')
+# Load Mappings
+mapping = joblib.load('mapping.joblib')
+
+
+#@title Run this cell to get all the visuals
+import matplotlib.pyplot as plt
+from sklearn.tree import export_graphviz
+import scipy.stats as stats
+import graphviz
+import seaborn as sns
+import random
+import numpy as np
+import joblib
+
+# Load neccessary data from the previous cells
+data = joblib.load("data.joblib")
+y_pred = joblib.load("y_pred.joblib")
+y_test = joblib.load("y_test.joblib")
+model = joblib.load('trained_model.joblib')
+X_train = joblib.load("X_train.joblib")
+
+
+def heatmap(sender): #sender argument serves the purpose of matching the signature of on_click event handler
+    correlations = data.corr()
+    correlations = correlations[['implant_size']]
+    correlations = correlations.drop(['implant_size','PATIENT','Unnamed: 0'])
+    correlations.loc['relative size'] *= -1
+
+    sorted_correlations = correlations.sort_values(by='implant_size',ascending=False)
+    
+    # create the heatmap with a DPI of 2400
+    plt.figure(figsize=(6,10), dpi=2400)
+    ax = sns.heatmap(sorted_correlations, annot=True, vmin=-1, vmax=1, cmap="coolwarm")
+
+    ax.set_xticklabels(ax.get_xticklabels(), fontsize=10)
+    plt.title('Correlation Matrix', fontweight='bold')
+    
+    # Show the heatmap
+    plt.show()
+    print('\n')
+
+def scatter_plot(sender):
+    x_jitter = [x + random.uniform(-0.5,0.5) for x in y_test]
+    y_jitter = [x + random.uniform(-0.5,0.5) for x in y_pred]
+
+    plt.scatter(x_jitter, y_jitter)
+    plt.xlabel("Actual Implant Size")
+    plt.ylabel("Predicted Implant Size")
+    plt.plot([0, 600], [0, 600], 'r-')
+    plt.legend(["Predicted","Best possible fit"])
+    plt.title("Model's Performance : Actual Versus Predicted implant_size", fontweight='bold')
+    plt.show()
+    print("\n")
+
+
+def decision_tree(sender):
+    dot_data = export_graphviz(model, out_file=None, 
+                           feature_names=X_train.columns,  
+                           filled=True, rounded=True,  
+                           special_characters=True)
+    graph = graphviz.Source(dot_data)
+    graph.format = 'jpeg'
+    graph.render(filename='decision_tree', cleanup=True)  # This will save the graph as 'decision_tree.jpeg'
+    display(graph)
+def wrapper(sender):
+    heatmap(sender)
+    scatter_plot(sender)
+    decision_tree(sender)
+
+# Manage Run Button
+run_button = widgets.Button(description="Run")
+run_button.on_click(wrapper) #on_click expects a func with a single argument which is the button object that is clicked , here provided by using nested class.method technique though it does not matter as the wrapper func is not using it
+display(run_button)
+
+# Create widgets
+uploaded = widgets.FileUpload()
+
+categorical_cols = ['relative size','education','socioeconomic']
+textboxes = []
+feature_names = ["age", "weight","height","relative size","education", "socioeconomic", 'distance ', 'base width','pinch']
+for i in range(len(feature_names)):
+    textbox = widgets.Text(description=feature_names[i])
+    textboxes.append(textbox)
+
+def handle_upload(sender):
+    uploaded_file = sender.data[0]
+    # Create a binary stream from the file data
+    new_data = pd.read_csv(io.StringIO(uploaded_file.decode()), delimiter = ',')
+    try:
+      new_data = new_data.drop("Unnamed: 7", axis = 1)
+    except:
+      pass
+    new_data = new_data.drop(0)
+    new_data = new_data[feature_names]
+    new_data['relative size'] = new_data['relative size'].apply(lambda x: "medium" if x == "medim" else x)
+    # Create a new Pandas DataFrame with the feature names
+    new_data = pd.DataFrame(new_data, columns=feature_names)
+    # Transform the input features using the same encoding used in the first step
+    for col in categorical_cols:
+        new_data[col] = new_data[col].map(mapping[col])
+    # Use the model to make predictions on the new data
+    predicted_y = model.predict(new_data)
+    # Print the predicted value of y
+    print("Predicted value/s of y: ", predicted_y)
+
+def handle_textbox(sender):
+    features = [textbox.value for textbox in textboxes]
+    new_data = pd.DataFrame([features], columns=feature_names)
+    for col in categorical_cols:
+        new_data[col] = new_data[col].map(mapping[col])
+        
+    predicted_y = model.predict(new_data)
+    print("Predicted value of implant_size: ", predicted_y)
+
+def handle_submit(sender):
+    if uploaded.data:
+        handle_upload(uploaded)
+    else:
+        handle_textbox(textboxes)
+
+# Display widgets
+display(uploaded)
+for textbox in textboxes:
+    display(textbox)
+
+# Manage Run Button
+run_button = widgets.Button(description="Run")
+run_button.on_click(handle_submit)
+display(run_button)
